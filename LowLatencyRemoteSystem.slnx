@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="LowLatencyRemoteSystem/LowLatencyRemoteSystem.vcxproj" Id="2bb74397-4d44-4cd6-8af1-0ab1d60e2e6c" />
+  <Project Path="LowLatencyRemoteSystem/LowLatencyRemoteClient.vcxproj" Id="e64d362b-7e7e-4ee9-bd59-d3b1b05d0b9a" />
+  <Project Path="LowLatencyRemoteSystem/LowLatencyRemoteLauncher.vcxproj" Id="3f7327ea-0407-47e8-9ce4-9b08ed1c6cf5" />
+  <Project Path="LowLatencyRemoteSystem/LowLatencyRemoteDebugGui.vcxproj" Id="8f4c15bd-9986-4e94-8e49-35c1f064a2ac" />
+</Solution>

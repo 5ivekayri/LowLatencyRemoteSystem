@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="apps\host">
+      <UniqueIdentifier>{52fd3504-2d8d-48cf-92ef-73d5f2597df9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{e87581d4-4b61-47c4-bc8f-e6ea08f18af7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="headers">
+      <UniqueIdentifier>{fef3d3b3-8c0f-44e3-95f2-f4b9d924c11b}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\apps\host\main.cpp"><Filter>apps\host</Filter></ClCompile>
+    <ClCompile Include="..\apps\host\HostApp.cpp"><Filter>apps\host</Filter></ClCompile>
+    <ClCompile Include="..\src\capture\DxgiAdapterEnumerator.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\capture\DxgiDuplicator.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\decode\MfH264Decoder.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\encode\MfH264Encoder.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\input\ClientInputCapture.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\input\InputInjector.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\render\D3D11Renderer.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\transport\TcpControlChannel.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\transport\UdpVideoTransport.cpp"><Filter>src</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\apps\host\HostApp.h"><Filter>apps\host</Filter></ClInclude>
+    <ClInclude Include="..\src\capture\DxgiAdapterEnumerator.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\capture\DxgiDuplicator.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\capture\ICaptureSource.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\common\ByteBuffer.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\common\Clock.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\common\Log.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\common\RawFrameUtils.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\common\Result.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\common\RingBuffer.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\decode\IVideoDecoder.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\decode\MfH264Decoder.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\encode\IVideoEncoder.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\encode\DummyRawFrameGenerator.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\encode\MfH264Encoder.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\input\ClientInputCapture.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\input\InputEvents.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\input\InputInjector.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\net\JitterBuffer.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\net\Packet.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\net\PacketReassembler.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\net\RateController.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\protocol\Messages.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\protocol\Protocol.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\protocol\Serializer.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\render\D3D11Renderer.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\transport\ITransport.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\transport\TcpControlChannel.h"><Filter>headers</Filter></ClInclude>
+    <ClInclude Include="..\src\transport\UdpVideoTransport.h"><Filter>headers</Filter></ClInclude>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="apps\launcher">
+      <UniqueIdentifier>{8685bb30-903f-4cce-a83c-fd95c8722529}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\apps\launcher\main.cpp"><Filter>apps\launcher</Filter></ClCompile>
+  </ItemGroup>
+</Project>
+
