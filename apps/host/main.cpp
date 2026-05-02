@@ -10,9 +10,11 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <string_view>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -68,6 +70,15 @@ remote::host::HostConfig ParseArgs(int argc, char** argv) {
             config.outputIndex = ParseU32(argv[++i], config.outputIndex);
         } else if (arg == "--fps" && i + 1 < argc) {
             config.fps = ParseU32(argv[++i], config.fps);
+        } else if (arg == "--max-mbps" && i + 1 < argc) {
+            config.maxMbps = ParseU32(argv[++i], config.maxMbps);
+            config.maxMbpsProvided = true;
+        } else if (arg == "--udp-send-buffer" && i + 1 < argc) {
+            config.udpSendBufferBytes = ParseU32(argv[++i], config.udpSendBufferBytes);
+        } else if (arg == "--mtu-payload" && i + 1 < argc) {
+            config.mtuPayloadBytes = ParseU32(argv[++i], config.mtuPayloadBytes);
+        } else if (arg == "--no-packet-pacing") {
+            config.packetPacingEnabled = false;
         } else if (arg == "--width" && i + 1 < argc) {
             config.width = ParseU32(argv[++i], config.width);
         } else if (arg == "--height" && i + 1 < argc) {
@@ -153,6 +164,43 @@ int RunSelfTest(remote::host::HostConfig& config) {
         remote::Log(remote::LogLevel::Error, "SELFTEST dxgi FAIL: all 30 acquire attempts timed out");
         return 1;
     }
+    if (config.selfTest == "dxgi-resize") {
+        remote::capture::DxgiDuplicator dxgi;
+        auto init = dxgi.Initialize(config.adapterIndex, config.outputIndex);
+        if (!init) {
+            remote::Logf(remote::LogLevel::Error, "SELFTEST dxgi-resize FAIL init: {}", init.error());
+            return 1;
+        }
+        const uint32_t targetW = config.width != 0 ? config.width : 640;
+        const uint32_t targetH = config.height != 0 ? config.height : 360;
+        for (uint64_t attempt = 1; attempt <= 30; ++attempt) {
+            auto frame = dxgi.AcquireFrame(100, attempt);
+            if (!frame) {
+                remote::Logf(remote::LogLevel::Error, "SELFTEST dxgi-resize FAIL acquire: {}", frame.error());
+                return 1;
+            }
+            if (!frame.value().has_value()) {
+                continue;
+            }
+            const auto& f = *frame.value();
+            auto resized = remote::ResizeBGRA8Nearest(remote::AsBytes(f.bytes), f.width, f.height, f.strideBytes, targetW, targetH);
+            auto validation = remote::ValidateRawBGRAFrame(targetW, targetH, targetW * 4, remote::AsBytes(resized));
+            auto saved = remote::SaveBGRA8ToBMP(artifacts / "dxgi_resized_frame.bmp", targetW, targetH, targetW * 4, remote::AsBytes(resized));
+            remote::Logf(validation.valid && saved ? remote::LogLevel::Info : remote::LogLevel::Error,
+                         "SELFTEST dxgi-resize {} source={}x{} target={}x{} checksum={} uniqueColors={} save={}",
+                         validation.valid ? "PASS" : "FAIL",
+                         f.width,
+                         f.height,
+                         targetW,
+                         targetH,
+                         validation.checksum,
+                         validation.uniqueSampledColors,
+                         saved ? "ok" : saved.error());
+            return validation.valid && saved ? 0 : 1;
+        }
+        remote::Log(remote::LogLevel::Error, "SELFTEST dxgi-resize FAIL: all 30 acquire attempts timed out");
+        return 1;
+    }
     if (config.selfTest == "udp-send") {
         remote::transport::UdpVideoTransport udp;
         auto bound = udp.Bind("0.0.0.0", 0);
@@ -165,19 +213,27 @@ int RunSelfTest(remote::host::HostConfig& config) {
             remote::Logf(remote::LogLevel::Error, "SELFTEST udp-send FAIL remote: {}", remoteResult.error());
             return 1;
         }
-        remote::encode::DummyRawFrameGenerator generator(320, 180);
+        const uint32_t width = config.width != 0 ? config.width : 640;
+        const uint32_t height = config.height != 0 ? config.height : 360;
+        const uint32_t fps = config.fps != 0 ? config.fps : 10;
+        remote::encode::DummyRawFrameGenerator generator(width, height);
         uint64_t sequence = 1;
         uint64_t packets = 0;
         uint64_t bytes = 0;
-        for (uint64_t frameId = 1; frameId <= 90; ++frameId) {
+        const uint64_t framesToSend = static_cast<uint64_t>(fps) * 3;
+        auto nextFrameAt = std::chrono::steady_clock::now();
+        const auto frameInterval = std::chrono::microseconds(1'000'000 / fps);
+        for (uint64_t frameId = 1; frameId <= framesToSend; ++frameId) {
+            nextFrameAt += frameInterval;
             auto frame = generator.Generate(frameId);
             auto sent = PacketizeAndSend(udp, frame.header, remote::AsBytes(frame.bytes), sequence, packets, bytes);
             if (!sent) {
                 remote::Logf(remote::LogLevel::Error, "SELFTEST udp-send FAIL: {}", sent.error());
                 return 1;
             }
+            std::this_thread::sleep_until(nextFrameAt);
         }
-        remote::Logf(remote::LogLevel::Info, "SELFTEST udp-send PASS frames=90 packets={} bytes={}", packets, bytes);
+        remote::Logf(remote::LogLevel::Info, "SELFTEST udp-send PASS frames={} packets={} bytes={}", framesToSend, packets, bytes);
         return 0;
     }
     return -1;

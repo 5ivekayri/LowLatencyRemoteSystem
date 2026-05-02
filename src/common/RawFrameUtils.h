@@ -81,6 +81,32 @@ inline RawFrameValidation ValidateRawBGRAFrame(uint32_t width, uint32_t height, 
     return result;
 }
 
+inline ByteBuffer ResizeBGRA8Nearest(std::span<const std::byte> srcData, uint32_t srcW, uint32_t srcH, uint32_t srcStride, uint32_t dstW, uint32_t dstH) {
+    ByteBuffer out;
+    if (srcW == 0 || srcH == 0 || dstW == 0 || dstH == 0 || srcStride < srcW * 4 ||
+        srcData.size() < static_cast<size_t>(srcStride) * srcH) {
+        return out;
+    }
+
+    const uint32_t dstStride = dstW * 4;
+    out.resize(static_cast<size_t>(dstStride) * dstH);
+    for (uint32_t y = 0; y < dstH; ++y) {
+        const uint32_t srcY = static_cast<uint32_t>((static_cast<uint64_t>(y) * srcH) / dstH);
+        const auto* srcRow = srcData.data() + static_cast<size_t>(srcY) * srcStride;
+        auto* dstRow = out.data() + static_cast<size_t>(y) * dstStride;
+        for (uint32_t x = 0; x < dstW; ++x) {
+            const uint32_t srcX = static_cast<uint32_t>((static_cast<uint64_t>(x) * srcW) / dstW);
+            const auto* srcPx = srcRow + static_cast<size_t>(srcX) * 4;
+            auto* dstPx = dstRow + static_cast<size_t>(x) * 4;
+            dstPx[0] = srcPx[0];
+            dstPx[1] = srcPx[1];
+            dstPx[2] = srcPx[2];
+            dstPx[3] = srcPx[3];
+        }
+    }
+    return out;
+}
+
 inline Result SaveBGRA8ToBMP(const std::filesystem::path& path, uint32_t width, uint32_t height, uint32_t strideBytes, std::span<const std::byte> data) {
     if (width == 0 || height == 0 || strideBytes < width * 4 || data.size() < static_cast<size_t>(strideBytes) * height) {
         return Result::Fail("invalid BGRA frame for BMP save");

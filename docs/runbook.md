@@ -25,7 +25,7 @@ Client:
 Host:
 
 ```powershell
-.\x64\Debug\remote_host.exe --mode dxgi --adapter 0 --output 0 --fps 30 --bind 127.0.0.1 --tcp 48000
+.\x64\Debug\remote_host.exe --mode dxgi --adapter 0 --output 0 --width 640 --height 360 --fps 10 --max-mbps 150 --bind 127.0.0.1 --tcp 48000
 ```
 
 Client:
@@ -39,7 +39,7 @@ Client:
 On host PC:
 
 ```powershell
-.\x64\Debug\remote_host.exe --mode dxgi --adapter 0 --output 0 --fps 30 --bind 0.0.0.0 --tcp 48000
+.\x64\Debug\remote_host.exe --mode dxgi --adapter 0 --output 0 --width 640 --height 360 --fps 10 --max-mbps 100 --bind 0.0.0.0 --tcp 48000
 ```
 
 On client PC:
@@ -92,7 +92,18 @@ Expected:
 
 If this fails with `DXGI_ERROR_UNSUPPORTED`, the issue is Desktop Duplication availability for the selected adapter/output/session, not UDP or D3D11 rendering.
 
-4. Test UDP only:
+4. Test DXGI resize:
+
+```powershell
+.\x64\Debug\remote_host.exe --self-test dxgi-resize --adapter 0 --output 0 --width 640 --height 360
+```
+
+Expected:
+
+- `artifacts\dxgi_resized_frame.bmp` exists and shows the real desktop downscaled to `640x360`.
+- `SELFTEST dxgi-resize PASS`.
+
+5. Test UDP only:
 
 Terminal A:
 
@@ -103,7 +114,7 @@ Terminal A:
 Terminal B:
 
 ```powershell
-.\x64\Debug\remote_host.exe --self-test udp-send --target 127.0.0.1 --udp 48001
+.\x64\Debug\remote_host.exe --self-test udp-send --target 127.0.0.1 --udp 48001 --width 640 --height 360 --fps 10 --max-mbps 150
 ```
 
 Expected:
@@ -112,7 +123,7 @@ Expected:
 - `artifacts\udp_received_frame.bmp` exists.
 - `SELFTEST udp-recv PASS`.
 
-5. Test renderer only:
+6. Test renderer only:
 
 ```powershell
 .\x64\Debug\remote_client.exe --self-test renderer
@@ -123,10 +134,10 @@ Expected:
 - D3D11 window opens and displays the local dummy frame for 3 seconds.
 - `SELFTEST renderer PASS`.
 
-6. Full local run:
+7. Full local DXGI raw run:
 
 ```powershell
-.\x64\Debug\remote_host.exe --mode dxgi --adapter 0 --output 0 --fps 30 --bind 127.0.0.1 --tcp 48000
+.\x64\Debug\remote_host.exe --mode dxgi --adapter 0 --output 0 --width 640 --height 360 --fps 10 --max-mbps 150 --bind 127.0.0.1 --tcp 48000
 .\x64\Debug\remote_client.exe --host 127.0.0.1 --tcp 48000 --udp 48001 --bind 0.0.0.0
 ```
 
@@ -136,6 +147,8 @@ Expected:
 - Client receives UDP packets.
 - First complete frame is logged.
 - Renderer shows desktop.
+
+Raw BGRA is a diagnostic mode only. Native `1920x1080` BGRA at `30 FPS` is about `249 MB/s` before UDP overhead, so it can exhaust Winsock buffers with `WSAENOBUFS`. Use reduced raw settings like `640x360@10` until H.264 is implemented.
 
 ## Debug GUI
 
@@ -162,3 +175,5 @@ Recommended smoke test:
 `Start Both` waits until the host TCP port is reachable before it starts the client. If the host exits first, the GUI logs that condition instead of letting the client fail with `Win32Error=10061`.
 
 For DXGI testing, switch mode to `dxgi`, select adapter/output, then click `Start Both`. If the GUI reports that the host exited before TCP became ready, check the host console for the DXGI initialization error and try another adapter/output.
+
+The GUI currently launches DXGI raw preview with explicit safe raw settings: `--width 640 --height 360 --max-mbps 150`. This prevents accidental native `1080p` raw UDP streaming.

@@ -328,6 +328,7 @@ std::string CurrentHostArgs(HWND hwnd) {
         output = g_adapters[adapterSel].outputs[outputSel].index;
     }
 
+    const std::string rawLimits = mode == "dxgi" ? " --width 640 --height 360 --max-mbps 150" : "";
     return std::format(
         "--mode {} --adapter {} --output {} --fps {} --bind {} --tcp {} --udp {} --token {}",
         mode,
@@ -337,7 +338,7 @@ std::string CurrentHostArgs(HWND hwnd) {
         GetText(hwnd, IdHostBind),
         GetText(hwnd, IdHostTcp),
         GetText(hwnd, IdHostUdp),
-        GetText(hwnd, IdToken));
+        GetText(hwnd, IdToken)) + rawLimits;
 }
 
 std::string CurrentClientArgs(HWND hwnd) {

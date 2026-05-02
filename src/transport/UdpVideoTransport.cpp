@@ -81,6 +81,7 @@ Result UdpVideoTransport::SetRemote(const std::string& host, uint16_t port) {
 }
 
 Result UdpVideoTransport::SendPacket(const protocol::PacketHeader& header, std::span<const std::byte> payload) {
+    lastSendError_ = 0;
     if (socket_ == INVALID_SOCKET) {
         return Result::Fail("UDP socket is not bound");
     }
@@ -103,7 +104,8 @@ Result UdpVideoTransport::SendPacket(const protocol::PacketHeader& header, std::
         reinterpret_cast<const sockaddr*>(&remote_),
         sizeof(remote_));
     if (sent == SOCKET_ERROR) {
-        LogWin32Error("sendto(UDP)", WSAGetLastError());
+        lastSendError_ = WSAGetLastError();
+        LogWin32Error("sendto(UDP)", lastSendError_);
         return Result::Fail("send UDP packet failed");
     }
 
@@ -174,6 +176,14 @@ Result UdpVideoTransport::SetBufferSizes(int receiveBytes, int sendBytes) {
     if (setsockopt(socket_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&sendBytes), sizeof(sendBytes)) == SOCKET_ERROR) {
         LogWin32Error("setsockopt(UDP SO_SNDBUF)", WSAGetLastError());
         return Result::Fail("configure UDP send buffer failed");
+    }
+    int actualReceive = 0;
+    int actualSend = 0;
+    int actualReceiveSize = sizeof(actualReceive);
+    int actualSendSize = sizeof(actualSend);
+    if (getsockopt(socket_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<char*>(&actualReceive), &actualReceiveSize) == 0 &&
+        getsockopt(socket_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<char*>(&actualSend), &actualSendSize) == 0) {
+        Logf(LogLevel::Info, "UDP socket buffers requested rcv={} snd={} actual rcv={} snd={}", receiveBytes, sendBytes, actualReceive, actualSend);
     }
     return Result::Ok();
 }

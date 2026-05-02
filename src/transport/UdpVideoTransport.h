@@ -35,12 +35,14 @@ public:
     ResultT<ReceivedPacket> ReceivePacket();
     Result SetReceiveTimeout(int timeoutMs);
     Result SetBufferSizes(int receiveBytes, int sendBytes);
+    [[nodiscard]] int lastSendError() const noexcept { return lastSendError_; }
 
 private:
     WinsockRuntime winsock_;
     SOCKET socket_ = INVALID_SOCKET;
     sockaddr_in remote_{};
     bool hasRemote_ = false;
+    int lastSendError_ = 0;
 };
 
 } // namespace remote::transport

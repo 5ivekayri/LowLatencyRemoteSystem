@@ -15,6 +15,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <winsock2.h>
 #include <windows.h>
 
 namespace remote::host {
@@ -51,8 +52,23 @@ Result HostApp::Initialize() {
     }
 
     if (config_.fps == 0) {
-        config_.fps = (config_.mode == CaptureMode::Dummy) ? 60 : 30;
+        config_.fps = (config_.mode == CaptureMode::Dummy) ? 60 : 10;
     }
+    if (config_.mode == CaptureMode::Dummy && !config_.maxMbpsProvided) {
+        config_.maxMbps = 1000;
+    }
+    if (config_.mode == CaptureMode::Dxgi && (config_.width == 0 || config_.height == 0)) {
+        config_.width = 640;
+        config_.height = 360;
+        Log(LogLevel::Warn, "Raw DXGI mode defaults to reduced resolution because uncompressed 1080p is too large.");
+    }
+    rawStream_.targetWidth = config_.width != 0 ? config_.width : streamWidth_;
+    rawStream_.targetHeight = config_.height != 0 ? config_.height : streamHeight_;
+    rawStream_.targetFps = config_.fps;
+    rawStream_.maxMbps = config_.maxMbps;
+    rawStream_.mtuPayloadBytes = config_.mtuPayloadBytes;
+    rawStream_.packetPacingEnabled = config_.packetPacingEnabled;
+    rawStream_.udpSendBufferBytes = config_.udpSendBufferBytes;
 
     Log(LogLevel::Info, "Host is visible and requires explicit token pairing");
     Logf(LogLevel::Info,
@@ -64,7 +80,21 @@ Result HostApp::Initialize() {
          config_.width,
          config_.height,
          config_.bindAddress);
+    Logf(LogLevel::Info,
+         "Raw stream config: target={}x{} fps={} maxMbps={} mtuPayloadBytes={} pacing={} udpSendBufferBytes={}",
+         rawStream_.targetWidth,
+         rawStream_.targetHeight,
+         rawStream_.targetFps,
+         rawStream_.maxMbps,
+         rawStream_.mtuPayloadBytes,
+         rawStream_.packetPacingEnabled ? "true" : "false",
+         rawStream_.udpSendBufferBytes);
     Logf(LogLevel::Info, "Selected frame source: {}", SourceName(config_.mode));
+
+    auto budgetPreflight = ValidateRawStreamBudget();
+    if (!budgetPreflight) {
+        return budgetPreflight;
+    }
 
     auto source = InitializeFrameSource();
     if (!source) {
@@ -74,6 +104,10 @@ Result HostApp::Initialize() {
     if (streamWidth_ == 0 || streamHeight_ == 0) {
         Log(LogLevel::Error, "FATAL frame source produced invalid 0x0 dimensions");
         return Result::Fail("invalid frame source dimensions");
+    }
+    auto budget = ValidateRawStreamBudget();
+    if (!budget) {
+        return budget;
     }
 
     if (config_.bindAddress == "0.0.0.0") {
@@ -102,7 +136,17 @@ Result HostApp::InitializeFrameSource() {
         }
         streamWidth_ = capture_.width();
         streamHeight_ = capture_.height();
-        Logf(LogLevel::Info, "source=DXGI initialized dimensions={}x{} format={}", streamWidth_, streamHeight_, static_cast<uint32_t>(capture_.format()));
+        sourceWidth_ = capture_.width();
+        sourceHeight_ = capture_.height();
+        streamWidth_ = rawStream_.targetWidth;
+        streamHeight_ = rawStream_.targetHeight;
+        Logf(LogLevel::Info,
+             "source=DXGI initialized capture={}x{} stream={}x{} format={}",
+             sourceWidth_,
+             sourceHeight_,
+             streamWidth_,
+             streamHeight_,
+             static_cast<uint32_t>(capture_.format()));
     } else {
         if (config_.width != 0) {
             streamWidth_ = config_.width;
@@ -110,9 +154,29 @@ Result HostApp::InitializeFrameSource() {
         if (config_.height != 0) {
             streamHeight_ = config_.height;
         }
+        sourceWidth_ = streamWidth_;
+        sourceHeight_ = streamHeight_;
+        rawStream_.targetWidth = streamWidth_;
+        rawStream_.targetHeight = streamHeight_;
         Logf(LogLevel::Info, "source=Dummy initialized dimensions={}x{}", streamWidth_, streamHeight_);
     }
     frameSourceInitialized_ = true;
+    return Result::Ok();
+}
+
+Result HostApp::ValidateRawStreamBudget() const {
+    if (rawStream_.targetWidth == 0 || rawStream_.targetHeight == 0 || config_.fps == 0 || config_.maxMbps == 0) {
+        return Result::Fail("raw stream dimensions/fps/maxMbps must be non-zero");
+    }
+    const double estimatedMbps = static_cast<double>(rawStream_.targetWidth) * static_cast<double>(rawStream_.targetHeight) * 4.0 * static_cast<double>(config_.fps) * 8.0 / 1'000'000.0;
+    if (estimatedMbps > static_cast<double>(config_.maxMbps)) {
+        Logf(LogLevel::Error,
+             "FATAL Raw stream exceeds maxMbps. Requested {:.1f} Mbps, limit {} Mbps. Lower width/height/fps or raise --max-mbps.",
+             estimatedMbps,
+             config_.maxMbps);
+        return Result::Fail("raw stream exceeds configured maxMbps");
+    }
+    Logf(LogLevel::Info, "Raw stream budget OK: estimated={:.1f}Mbps limit={}Mbps", estimatedMbps, config_.maxMbps);
     return Result::Ok();
 }
 
@@ -209,6 +273,10 @@ Result HostApp::RunRawVideoLoop() {
     if (!udp) {
         return udp;
     }
+    auto sendBuffer = video_.SetBufferSizes(8 * 1024 * 1024, static_cast<int>(config_.udpSendBufferBytes));
+    if (!sendBuffer) {
+        return sendBuffer;
+    }
     auto remote = video_.SetRemote(clientUdpAddress_, clientUdpPort_);
     if (!remote) {
         return remote;
@@ -218,6 +286,11 @@ Result HostApp::RunRawVideoLoop() {
     uint64_t frameId = 1;
     uint64_t sentPacketsThisSecond = 0;
     uint64_t sentFramesThisSecond = 0;
+    uint64_t capturedFramesThisSecond = 0;
+    uint64_t sentBytesThisSecond = 0;
+    uint64_t droppedFramesDueToBackpressure = 0;
+    uint64_t sendtoErrors = 0;
+    int lastWin32Error = 0;
     uint64_t copyTotalUsThisSecond = 0;
     uint64_t copySamplesThisSecond = 0;
     if (config_.mode == CaptureMode::Dxgi) {
@@ -253,13 +326,17 @@ Result HostApp::RunRawVideoLoop() {
 
     auto nextFrameAt = std::chrono::steady_clock::now();
     auto nextStatsAt = nextFrameAt + std::chrono::seconds(1);
+    encode::DummyRawFrameGenerator dummyGenerator(streamWidth_, streamHeight_);
     const auto frameInterval = std::chrono::microseconds(1'000'000 / config_.fps);
     Logf(LogLevel::Info,
-         "Video loop started: sourceKind={} width={} height={} fps={} udpTarget={}:{}",
+         "Video loop started: sourceKind={} capture={}x{} stream={}x{} fps={} maxMbps={} udpTarget={}:{}",
          config_.mode == CaptureMode::Dxgi ? "DXGI" : "Dummy",
+         sourceWidth_,
+         sourceHeight_,
          streamWidth_,
          streamHeight_,
          config_.fps,
+         config_.maxMbps,
          clientUdpAddress_,
          clientUdpPort_);
     uint32_t loggedSentFrames = 0;
@@ -294,17 +371,26 @@ Result HostApp::RunRawVideoLoop() {
             ++copySamplesThisSecond;
 
             const auto& cap = *captured.value();
+            ++capturedFramesThisSecond;
+            if (cap.width != streamWidth_ || cap.height != streamHeight_) {
+                frameBytes = ResizeBGRA8Nearest(AsBytes(cap.bytes), cap.width, cap.height, cap.strideBytes, streamWidth_, streamHeight_);
+                if (frameBytes.empty()) {
+                    return Result::Fail("resize BGRA frame failed");
+                }
+                // TODO: replace this CPU scaler with a GPU/D3D11 scaling path before H.264 encode.
+            } else {
+                frameBytes = cap.bytes;
+            }
             frameHeader.payloadFormat = static_cast<uint32_t>(protocol::VideoPayloadFormat::RawBGRA8);
-            frameHeader.width = cap.width;
-            frameHeader.height = cap.height;
-            frameHeader.strideBytes = cap.strideBytes;
+            frameHeader.width = streamWidth_;
+            frameHeader.height = streamHeight_;
+            frameHeader.strideBytes = streamWidth_ * 4;
             frameHeader.frameId = frameId;
             frameHeader.captureTimestampUs = cap.timestampUs;
-            frameHeader.payloadSizeBytes = static_cast<uint32_t>(cap.bytes.size());
-            frameBytes = cap.bytes;
+            frameHeader.payloadSizeBytes = static_cast<uint32_t>(frameBytes.size());
         } else {
-            encode::DummyRawFrameGenerator generator(streamWidth_, streamHeight_);
-            auto rawFrame = generator.Generate(frameId);
+            ++capturedFramesThisSecond;
+            auto rawFrame = dummyGenerator.Generate(frameId);
             frameHeader = rawFrame.header;
             frameBytes = std::move(rawFrame.bytes);
         }
@@ -312,11 +398,21 @@ Result HostApp::RunRawVideoLoop() {
         const uint64_t sequenceBefore = sequence;
         auto sentFrame = SendRawFrame(frameHeader, AsBytes(frameBytes), sequence);
         if (!sentFrame) {
-            running = false;
-            if (inputThread.joinable()) {
-                inputThread.join();
-            }
-            return sentFrame;
+            Logf(LogLevel::Warn, "Dropping frame {} after UDP send failure: {}", frameHeader.frameId, sentFrame.error());
+            ++droppedFramesDueToBackpressure;
+            ++sendtoErrors;
+            lastWin32Error = video_.lastSendError();
+            ++frameId;
+            std::this_thread::sleep_until(nextFrameAt);
+            continue;
+        }
+        if (sentFrame.value().dropped) {
+            ++droppedFramesDueToBackpressure;
+            ++sendtoErrors;
+            lastWin32Error = sentFrame.value().lastWin32Error;
+            ++frameId;
+            std::this_thread::sleep_until(nextFrameAt);
+            continue;
         }
         if (loggedSentFrames < 3) {
             Logf(LogLevel::Info,
@@ -332,7 +428,8 @@ Result HostApp::RunRawVideoLoop() {
             ++loggedSentFrames;
         }
         lastFrameSentAt = std::chrono::steady_clock::now();
-        sentPacketsThisSecond += sequence - sequenceBefore;
+        sentPacketsThisSecond += sentFrame.value().packetsSent;
+        sentBytesThisSecond += sentFrame.value().bytesSent;
 
         ++sentFramesThisSecond;
         ++frameId;
@@ -345,13 +442,20 @@ Result HostApp::RunRawVideoLoop() {
         if (now >= nextStatsAt) {
             const double averageCopyMs = copySamplesThisSecond == 0 ? 0.0 : static_cast<double>(copyTotalUsThisSecond) / static_cast<double>(copySamplesThisSecond) / 1000.0;
             Logf(LogLevel::Info,
-                 "UDP send stats: frames/s={} packets/s={} nextSequence={} captureCopyAvgMs={:.2f}",
+                 "UDP send stats: capturedFrames/s={} sentFrames/s={} sentPackets/s={} sentMbps={:.1f} droppedFramesDueToBackpressure={} sendtoErrors={} lastWin32Error={} nextSequence={} captureCopyAvgMs={:.2f}",
+                 capturedFramesThisSecond,
                  sentFramesThisSecond,
                  sentPacketsThisSecond,
+                 static_cast<double>(sentBytesThisSecond) * 8.0 / 1'000'000.0,
+                 droppedFramesDueToBackpressure,
+                 sendtoErrors,
+                 lastWin32Error,
                  sequence,
                  averageCopyMs);
+            capturedFramesThisSecond = 0;
             sentFramesThisSecond = 0;
             sentPacketsThisSecond = 0;
+            sentBytesThisSecond = 0;
             copyTotalUsThisSecond = 0;
             copySamplesThisSecond = 0;
             nextStatsAt = now + std::chrono::seconds(1);
@@ -366,14 +470,23 @@ Result HostApp::RunRawVideoLoop() {
     return Result::Ok();
 }
 
-Result HostApp::SendRawFrame(const protocol::VideoFrameHeader& frameHeader, std::span<const std::byte> payload, uint64_t& sequence) {
+ResultT<HostApp::SendFrameResult> HostApp::SendRawFrame(const protocol::VideoFrameHeader& frameHeader, std::span<const std::byte> payload, uint64_t& sequence) {
+    SendFrameResult result;
     ByteBuffer framePayload;
     framePayload.reserve(sizeof(protocol::VideoFrameHeader) + payload.size());
     protocol::AppendPod(framePayload, frameHeader);
     framePayload.insert(framePayload.end(), payload.begin(), payload.end());
 
-    const size_t fragmentPayloadSize = protocol::TargetUdpPayloadSize;
+    const size_t fragmentPayloadSize = std::min<size_t>(config_.mtuPayloadBytes, protocol::TargetUdpPayloadSize);
     const uint16_t fragmentCount = static_cast<uint16_t>((framePayload.size() + fragmentPayloadSize - 1) / fragmentPayloadSize);
+    if (fragmentCount > 2000) {
+        Logf(LogLevel::Warn, "Raw frame fragmentCount={} is very high; reduce resolution/FPS or enable H.264 later.", fragmentCount);
+    }
+    if (pacingLast_ == std::chrono::steady_clock::time_point{}) {
+        pacingLast_ = std::chrono::steady_clock::now();
+        const double bytesPerSecond = static_cast<double>(config_.maxMbps) * 1'000'000.0 / 8.0;
+        pacingTokens_ = bytesPerSecond * 0.050;
+    }
     for (uint16_t fragmentIndex = 0; fragmentIndex < fragmentCount; ++fragmentIndex) {
         const size_t offset = static_cast<size_t>(fragmentIndex) * fragmentPayloadSize;
         const size_t bytesLeft = framePayload.size() - offset;
@@ -389,12 +502,37 @@ Result HostApp::SendRawFrame(const protocol::VideoFrameHeader& frameHeader, std:
         header.flags = (fragmentIndex + 1 == fragmentCount) ? protocol::EndOfFrame : 0;
         header.payloadSize = static_cast<uint16_t>(payloadSize);
 
+        const size_t packetBytes = sizeof(protocol::PacketHeader) + payloadSize;
+        if (config_.packetPacingEnabled) {
+            const double bytesPerSecond = static_cast<double>(config_.maxMbps) * 1'000'000.0 / 8.0;
+            const double capacity = bytesPerSecond * 0.050;
+            while (pacingTokens_ < static_cast<double>(packetBytes)) {
+                const auto now = std::chrono::steady_clock::now();
+                const double elapsed = std::chrono::duration<double>(now - pacingLast_).count();
+                pacingLast_ = now;
+                pacingTokens_ = std::min(capacity, pacingTokens_ + elapsed * bytesPerSecond);
+                if (pacingTokens_ < static_cast<double>(packetBytes)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+            pacingTokens_ -= static_cast<double>(packetBytes);
+        }
+
         auto sent = video_.SendPacket(header, std::span<const std::byte>(framePayload.data() + offset, payloadSize));
         if (!sent) {
-            return sent;
+            result.lastWin32Error = video_.lastSendError();
+            result.dropped = true;
+            if (result.lastWin32Error == WSAENOBUFS) {
+                Log(LogLevel::Warn, "UDP send buffer exhausted; dropping frame. Reduce resolution/FPS/max-mbps.");
+            } else {
+                Logf(LogLevel::Warn, "UDP send failed; dropping current frame. Win32Error={}", result.lastWin32Error);
+            }
+            return ResultT<SendFrameResult>::Ok(result);
         }
+        ++result.packetsSent;
+        result.bytesSent += packetBytes;
     }
-    return Result::Ok();
+    return ResultT<SendFrameResult>::Ok(result);
 }
 
 } // namespace remote::host
